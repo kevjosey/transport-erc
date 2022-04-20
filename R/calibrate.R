@@ -62,17 +62,71 @@ calibrate <- function(cmat, target, base_weights = NULL, coefs_init = NULL,
 lagrange_ent <- function(coefs, cmat, target, base_weights) {
   
   temp <- sum(base_weights*exp(-cmat %*% coefs))
-  out <- temp + sum(target * coefs)
+  out <- temp - sum(target * coefs)
   return(out)
   
 }
 
-### Quadratic Programming (Approximate) Based on:
-### https://github.com/ebenmichael/balancer
+### Quadratic Programming (Approximate):
 
-standardize <- function(X, target, lambda = 0, lowlim = 0, uplim = 1,
-                        return_data = T, exact_global = F, scale_sample_size = F,
-                        eps_abs = 1e-5, eps_rel = 1e-5, ...) {
+
+# standardize <- function(X, target, lambda = NULL, lam_seq = seq(0, 0.25, length.out = 25)) {
+#   
+#   P <- diag(1, nrow(X))
+#   q <- rep(0, nrow(X))
+#   A <- cbind(rep(1, nrow(X)), X, -X, diag(1, nrow(X)))
+#   
+#   if (is.null(lambda) & !is.null(lam_seq)) {
+#     
+#     gammas <- sapply(lam_seq, function(lambda, ...){
+#       
+#       l <- 1e-4/nrow(X)
+#       b <- c(1, target - lambda, -target - lambda, rep(l, nrow(X)))
+#       
+#       balance.soln <- try(quadprog::solve.QP(P, q, A, b, meq = 1), silent = TRUE)
+#       
+#       if (inherits(balance.soln, "try-error"))
+#         return(rep(1/nrow(X), nrow(X)))
+#       else
+#         return(balance.soln$solution)
+#       
+#     })
+#     
+#     boot_idx <- replicate(100, sample(1:nrow(X), nrow(X), replace = TRUE))
+#     
+#     bal <- sapply(1:ncol(gammas), function(j, ...){
+#       
+#       gamma.tmp <- gammas[,j]
+#       
+#       imbalance <- apply(boot_idx, 2, function(k, ...)
+#         sqrt(sum(c(target - c(t(X[k,]) %*% gamma.tmp[k])/sum(gamma.tmp[k]))^2)))
+#       
+#       mean(imbalance)
+#       
+#     })
+#     
+#     gamma <- gammas[,which.min(bal)]
+#     
+#   } else if (!is.null(lambda)) {
+#     
+#     l <- 1e-4/nrow(X)
+#     b <- c(1, target - lambda, -target - lambda, rep(l, nrow(X)))
+#     balance.soln <- quadprog::solve.QP(P, q, A, b, meq = 1)
+#     gamma <- balance.soln$solution
+#     
+#   }
+#   
+#   imbalance <- abs(c(target - t(X) %*% gamma))
+#   names(imbalance) <- colnames(X)
+#   
+#   return(list(weights = gamma, imbalance = imbalance))
+#   
+# }
+
+### Based on https://github.com/ebenmichael/balancer
+
+standardize <- function(X, target, lambda = 1, lowlim = 1e-6, uplim = 1,
+                        exact = FALSE, eps_abs = 1e-6, eps_rel = 1e-6, ...) {
   
   # convert X to a matrix
   X <- as.matrix(X)
@@ -84,73 +138,46 @@ standardize <- function(X, target, lambda = 0, lowlim = 0, uplim = 1,
   m <- ncol(X)
   n <- nrow(X)
   
-  q <- create_q_vector(X, target, m)
-  P <- create_P_matrix(n, m)
-  
-  I0 <- create_I0_matrix(X, n, m, scale_sample_size)
+  # creates P and q
+  P <- Matrix::bdiag(Matrix::Diagonal(n, 0), Matrix::Diagonal(m, 1))
+  q <- Matrix::sparseVector(-c(X %*% target), 1:n, n + m)
+  I0 <- Matrix::bdiag(Matrix::Diagonal(n, 1), Matrix::Diagonal(m, 0))
   P <- P + lambda * I0
   
-  constraints <- create_constraints(X, target, lowlim, uplim, exact_global)
+  # creates A, l, and u
+  constraints <- create_constraints(X, target, lowlim, uplim, exact)
   
   settings <- do.call(osqp::osqpSettings,
                       c(list(eps_rel = eps_rel,
-                             eps_abs = eps_abs),
+                             eps_abs = eps_abs,
+                             verbose = FALSE),
                         list(...)))
   
-  solution <- osqp::solve_osqp(P, q, constraints$A,
-                               constraints$l, constraints$u,
-                               pars = settings)
+  solution <- osqp::solve_osqp(P, q, constraints$A, constraints$l, 
+                               constraints$u, pars = settings)
   
-  weights <- solution$x[1:nrow(X)]
+  weights <- solution$x[1:n]
   
   # compute imbalance matrix
-  imbalance <- as.matrix(target - t(X) %*% weights)
+  imbalance <- abs(c(target - t(X) %*% weights))
+  names(imbalance) <- colnames(X)
   
-  if(return_data) {
-    data_out <- list(P = P  - lambda * I0, q = q, constraints = constraints)
-  } else {
-    data_out <- NULL
-  }
+  weights[weights < 0] <- 0
+  weights <- n*weights
   
-  return(list(weights = weights, imbalance = imbalance, data_out = data_out))
+  return(list(weights = weights, imbalance = imbalance))
   
 }
 
-create_I0_matrix <- function(X, n, m, scale_sample_size = FALSE) {
-  
-  if(scale_sample_size) {
-    I0 <- Matrix::Diagonal(n, n)
-  } else {
-    I0 <- Matrix::Diagonal(n)
-  }
-  I0 <- Matrix::bdiag(I0, Matrix::Diagonal(m, 0))
-  return(I0)
-  
-}
-
-create_q_vector <- function(X, target, m) {
-  
-  q <- -c(X %*% target)
-  q <- Matrix::sparseVector(q, 1:length(q), length(q) + m)
-  return(q)
-  
-}
-
-create_P_matrix <- function(n, m) {
-  
-  return(Matrix::bdiag(Matrix::Diagonal(n, 0), Matrix::Diagonal(m, 1)))
-  
-}
-
-create_constraints <- function(X, target, lowlim, uplim, exact_global) {
+create_constraints <- function(X, target, lowlim, uplim, exact) {
   
   n <- nrow(X)
   m <- ncol(X)
   Xt <- t(X)
   
   # sum-to-one constraint for each group
-  A1 <- Matrix::Matrix(t(matrix(1, nrow = n, ncol = 1)))
-  A1 <- Matrix::cbind2(A1, Matrix::Matrix(0, nrow=nrow(A1), ncol = m))
+  A1 <- Matrix::Matrix(1, nrow = 1, ncol = n)
+  A1 <- Matrix::cbind2(A1, Matrix::Matrix(0, nrow = nrow(A1), ncol = m))
   l1 <- 1
   u1 <- 1
   
@@ -160,12 +187,12 @@ create_constraints <- function(X, target, lowlim, uplim, exact_global) {
   l2 <- rep(lowlim, n)
   u2 <- rep(uplim, n)
   
-  if(exact_global) {
+  if(exact) {
     # Constrain the overall mean to be equal to the target
-    A3 <- Xt * n
+    A3 <- Matrix::Matrix(Xt)
     A3 <- Matrix::cbind2(A3, Matrix::Matrix(0, nrow = nrow(A3), ncol = m))
-    l3 <- n * target
-    u3 <- n * target
+    l3 <- target
+    u3 <- target
   } else {
     # skip this constraint and just make empty
     A3 <- NULL
