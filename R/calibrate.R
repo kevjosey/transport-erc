@@ -62,7 +62,7 @@ calibrate <- function(cmat, target, base_weights = NULL, coefs_init = NULL,
 lagrange_ent <- function(coefs, cmat, target, base_weights) {
   
   temp <- sum(base_weights*exp(-cmat %*% coefs))
-  out <- temp - sum(target * coefs)
+  out <- temp + sum(target * coefs)
   return(out)
   
 }
