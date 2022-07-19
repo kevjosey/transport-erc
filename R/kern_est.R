@@ -1,7 +1,7 @@
 kern_est <- function(a.new, a, psi, bw, se.fit = FALSE, weights = NULL, int.mat = NULL, a.vals = NULL) {
     
   if(is.null(weights))
-    weights <- rep(1, times = length(y))
+    weights <- rep(1, times = length(a))
   
   n <- length(a)
   
@@ -33,22 +33,16 @@ kern_est <- function(a.new, a, psi, bw, se.fit = FALSE, weights = NULL, int.mat 
     
     eta <- c(g.std %*% b)
     
-    ## LOESS
-    # kern.mat <- matrix(rep(c((1 - abs((a.vals - a.new)/max.a.std)^3)^3), k), byrow = T, nrow = k)
-    # kern.mat[matrix(rep(abs(a.vals - a.new)/max.a.std, k), byrow = T, nrow = k) > 1] <- 0
-    # g.vals <- matrix(rep(c(a.vals - a.new), k), byrow = T, nrow = k)
-    # intfn1.mat <- kern.mat * int.mat[idx,]
-    # intfn2.mat <- g.vals * kern.mat * int.mat[idx,]
-    # 
-    # int1 <- apply(matrix(rep((a.vals[-1] - a.vals[-length(a.vals)]), k), byrow = T, nrow = k)*
-    #                 (intfn1.mat[,-1] + intfn1.mat[,-length(a.vals)])/2, 1, sum)
-    # int2 <- apply(matrix(rep((a.vals[-1] - a.vals[-length(a.vals)]), k), byrow = T, nrow = k)*
-    #                 (intfn2.mat[,-1] + intfn2.mat[,-length(a.vals)])/2, 1, sum)
-    
     ## Gaussian
+    kern.mat <- matrix(rep(dnorm((a.vals - a.new) / bw) / bw, n), byrow = T, nrow = n)
+    g.vals <- matrix(rep(c(a.vals - a.new) / bw, n), byrow = T, nrow = n)
+    intfn1.mat <- kern.mat * int.mat
+    intfn2.mat <- g.vals * kern.mat * int.mat
     
-    int1 <- colMeans(k.std * t(int.mat))
-    int2 <- colMeans(g.std * k.std * t(int.mat))
+    int1 <- rowSums(matrix(rep((a.vals[-1] - a.vals[-length(a.vals)]), n), byrow = T, nrow = n)*
+                      (intfn1.mat[,-1] + intfn1.mat[,-length(a.vals)])/2)
+    int2 <- rowSums(matrix(rep((a.vals[-1] - a.vals[-length(a.vals)]), n), byrow = T, nrow = n)*
+                      (intfn2.mat[,-1] + intfn2.mat[,-length(a.vals)])/2)
     
     U <- solve(crossprod(g.std, weights*k.std*g.std))
     V <- cbind(weights*(k.std * (psi - eta) + int1),

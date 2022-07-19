@@ -3,15 +3,15 @@ gen_data <- function(n0, n1, sig2 = 2, tau2 = 1, scenario, a.vals) {
   n <- n1 + n0
   
   # covariates
-  x01 <- stats::rnorm(n0, -1, 2)
-  x02 <- stats::rnorm(n0, 1, 2)
-  x03 <- stats::rnorm(n0, 0, 1)
-  x04 <- stats::rbinom(n0, 1, 0.3)
+  x01 <- stats::rnorm(n0, 0, 1)
+  x02 <- stats::rnorm(n0, -1, 2)
+  x03 <- stats::rnorm(n0, 1, 2)
+  x04 <- stats::rnorm(n0, -1, 2)
   
-  x11 <- stats::rnorm(n1, 1, 2)
-  x12 <- stats::rnorm(n1, -1, 2)
-  x13 <- stats::rnorm(n1, 0, 1)
-  x14 <- stats::rbinom(n1, 1, 0.7)
+  x11 <- stats::rnorm(n1, 0, 1)
+  x12 <- stats::rnorm(n1, 1, 2)
+  x13 <- stats::rnorm(n1, -1, 2)
+  x14 <- stats::rnorm(n1, 1, 2)
   
   x1 <- c(x01, x11)
   x2 <- c(x02, x12)
@@ -33,10 +33,10 @@ gen_data <- function(n0, n1, sig2 = 2, tau2 = 1, scenario, a.vals) {
   # u3 <- c(u03, u13)
   # u4 <- c(u04, u14)
   
-  u1 <- as.numeric(scale(exp(x1/2)))
-  u2 <- as.numeric(scale(x2/(1 + exp(x1)) + 10))
-  u3 <- as.numeric(scale((x1*x3/25 + 0.6)^3))
-  u4 <- as.numeric(scale((x2 + x4 + 10)^2))
+  u1 <- exp(x1/4)
+  u2 <- x2/(1 + exp(x1)) 
+  u3 <- abs(x1*x3) - 1
+  u4 <- ((x2 + x4)/5)^2 - 1
   
   # create matrix
   X <- cbind(int = rep(1, n), x1, x2, x3, x4)
@@ -47,42 +47,40 @@ gen_data <- function(n0, n1, sig2 = 2, tau2 = 1, scenario, a.vals) {
   # coefficients
   lambda <- c(10, 0.5, -0.5, -0.5, 0.5)
   beta <- c(1, -0.25, 0.75, -0.75, 0.25)
+  alpha <- c(1, -0.75, -0.25, 0.25, 0.75)
   
   if (scenario == "base"){
     e_X <- c(X %*% lambda)
     a <- rnorm(n, e_X, sqrt(tau2)) # treatment
-    mu <- c(X %*% beta) + 0.5*(a - 10) - 
-      cos(pi*(a - 6)/4) - 0.5*(a - 10)*x1
+    mu <- c(X %*% beta) - 2*cos(pi*(a - 6)/4) +
+      (a - 10)*(X %*% alpha)
   } else if (scenario == "ps-mis"){
     e_X <- c(U %*% lambda)
     a <- rnorm(n, e_X, sqrt(tau2))
-    mu <- c(X %*% beta) + 0.5*(a - 10) - 
-      cos(pi*(a - 6)/4) - 0.5*(a - 10)*x1
+    mu <- c(X %*% beta) - 2*cos(pi*(a - 6)/4) +
+      (a - 10)*(X %*% alpha)
   } else if (scenario == "out-mis") {
     e_X <- c(X %*% lambda)
     a <- rnorm(n, e_X, sqrt(tau2))
-    mu <- c(U %*% beta) + 0.5*(a - 10) - 
-      cos(pi*(a - 6)/4) - 0.5*(a - 10)*u1
+    mu <- c(U %*% beta) - 2*cos(pi*(a - 6)/4) +
+      (a - 10)*(U%*%alpha)
+  } else if (scenario == "mis"){
+    e_X <- c(U %*% lambda)
+    a <- rnorm(n, e_X, sqrt(tau2))
+    mu <- c(U %*% beta) - 2*cos(pi*(a - 6)/4) +
+      (a - 10)*(U%*%alpha)
   }
-  
-  ERC <- rep(NA, length(a.vals))
-  
-  for(i in 1:length(a.vals)) {
     
-    a.vec <- rep(a.vals[i], sum(s == 0))
-    
-    if (scenario == "out-mis") {
-      mu_out <- U[s == 0,] %*% beta + (a.vec - 10) - 
-        2*cos(pi*(a.vec - 6)/4) - (a.vec - 10)*U[s == 0,2]
-    } else { # out_scen == "a"
-      mu_out <- c(1, -1, 1, 0, 0.3) %*% beta + (a.vec - 10) - 
-        2*cos(pi*(a.vec - 6)/4) + (a.vec - 10)
-    }
-    
-    ERC[i] <- mean(mu_out)
-    
+  if (scenario == "out-mis" | scenario == "mis") {
+    ERC <- sum(colMeans(U[s == 0,]) * beta) -
+      2*cos(pi*(a.vals - 6)/4) +
+      (a.vals - 10)*mean(U[s == 0,] %*% alpha)
+  } else { # out_scen == "a"
+    ERC <- sum(c(1, 0, -1, 1, -1) * beta) -
+      2*cos(pi*(a.vals - 6)/4) +
+      (a.vals - 10)*mean(X[s == 0,] %*% alpha)
   }
-  
+    
   # potential outcomes
   y <- rnorm(n, mu, sqrt(sig2))
   

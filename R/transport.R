@@ -12,16 +12,17 @@ glm_transport <- function(a, y, x1, x0, offset = NULL, weights = NULL, family = 
   n1 <- nrow(x1)
   n0 <- nrow(x0)
   
-  mumod <- glm(y ~ ns(a, df) + a*, data = data.frame(x1), weights = weights,
+  mumod <- glm(y ~ a + cos(pi*(a - 6)/4) + x1 + x2 + x3 + x4 + a:(x1 + x2 + x3 + x4),
+               data = data.frame(a = a, x1), weights = weights,
                offset = offset, family = family)
   muhat <- mumod$fitted.values
   
-  estimate <- sapply(a.vals, function(a.tmp, ...) {
+  out <- sapply(a.vals, function(a.tmp, ...) {
     xa.tmp <- data.frame(x0, a = a.tmp)
     return(mean(predict(mumod, newdata = xa.tmp, type = "response")))
   })
   
-  return(estimate)
+  return(out)
   
 }
 
@@ -60,16 +61,16 @@ ipw_transport <- function(a, y, x1, x0, offset = NULL, weights = NULL, family = 
   })
   
   wts <- weights*rhohat*c(phat/pihat)
-  mumod <- glm(y ~ ns(a, df), data = data.frame(a = a, y = y),
-               offset = offset, weights = wts, family = family)
-  out <- predict(mumod, newdata = data.frame(a = a.vals))
+  psi <- c((y - mean(y))*wts + mean(y))
+  out <- sapply(a.vals, kern_est, psi = psi, a = a, bw = bw, se.fit = FALSE)
 
   return(out)
   
 }
 
 dr_transport <- function(a, y, x1, x0, offset = NULL, weights = NULL, family = gaussian(), 
-                         df = 4, bw = 1,  a.vals = seq(min(a), max(a), length.out = 100)){
+                         df = 4, bw = 1,  a.vals = seq(min(a), max(a), length.out = 100),
+                         sl.lib = c("SL.mean", "SL.glm", "SL.earth", "SL.glmnet", "SL.ranger")){
   
   if(is.null(offset))
     offset <- rep(0, times = length(y))
@@ -86,7 +87,7 @@ dr_transport <- function(a, y, x1, x0, offset = NULL, weights = NULL, family = g
   x0.mat <- model.matrix(~ ., data = data.frame(x0))
   
   # estimate nuisance outcome model with splines
-  mumod <- glm(y ~ ns(a, df) + . + a:., data = data.frame(x1), offset = offset, family = family)
+  mumod <- glm(y ~ a + cos(pi*(a - 6)/4) + x1 + x2 + x3 + x4 + a:(x1 + x2 + x3 + x4), data = data.frame(a = a, x1), offset = offset, family = family)
   muhat <- mumod$fitted.values
   
   mhat <- sapply(a, function(a.tmp, ...) {
