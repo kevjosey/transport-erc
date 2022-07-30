@@ -27,7 +27,7 @@ glm_transport <- function(a, y, x1, x0, offset = NULL, weights = NULL, family = 
 }
 
 ipw_transport <- function(a, y, x1, x0, offset = NULL, weights = NULL, family = gaussian(),
-                          df = 4, a.vals = seq(min(a), max(a), length.out = 100),
+                          df = 4, bw = 1, a.vals = seq(min(a), max(a), length.out = 100),
                           sl.lib = c("SL.mean", "SL.glm", "SL.earth", "SL.glmnet", "SL.ranger")) {
   
   if(is.null(offset))
@@ -60,15 +60,22 @@ ipw_transport <- function(a, y, x1, x0, offset = NULL, weights = NULL, family = 
     return(mean(approx(x = dens$x, y = dens$y, xout = a.std.tmp)$y / sd.a, na.rm = T))
   })
   
-  wts <- weights*rhohat*c(phat/pihat)
-  psi <- c((y - mean(y))*wts + mean(y))
-  out <- sapply(a.vals, kern_est, psi = psi, a = a, bw = bw, se.fit = FALSE)
+  wts <- rhohat*c(phat/pihat)
+  
+  # estimate sampling weights
+  # astar <- c(a - mean(a))/var(a)
+  # astar2 <- -1 + c(a - mean(a))^2/var(a)
+  # mod <- calibrate(cmat = cbind(x1, x1*astar, astar2), 
+  #                  target = c(n1*colMeans(x0), rep(0, m+1)))
+  # wts <- mod$weights
+
+  out <- sapply(a.vals, kern_est_ipw, y = y, a = a, bw = bw, weights = wts, se.fit = TRUE)
 
   return(out)
   
 }
 
-dr_transport <- function(a, y, x1, x0, offset = NULL, weights = NULL, family = gaussian(), 
+dr_transport <- function(a, y, x1, x0, s, offset = NULL, weights = NULL, family = gaussian(), 
                          df = 4, bw = 1,  a.vals = seq(min(a), max(a), length.out = 100),
                          sl.lib = c("SL.mean", "SL.glm", "SL.earth", "SL.glmnet", "SL.ranger")){
   
@@ -87,33 +94,44 @@ dr_transport <- function(a, y, x1, x0, offset = NULL, weights = NULL, family = g
   x0.mat <- model.matrix(~ ., data = data.frame(x0))
   
   # estimate nuisance outcome model with splines
-  mumod <- glm(y ~ a + cos(pi*(a - 6)/4) + x1 + x2 + x3 + x4 + a:(x1 + x2 + x3 + x4), data = data.frame(a = a, x1), offset = offset, family = family)
+  mumod <- gam(y ~ s(a, 5) + . + a:. - a, data = data.frame(a = a, x1), offset = offset, family = family)
   muhat <- mumod$fitted.values
   
-  mhat <- sapply(a, function(a.tmp, ...) {
+  mhat.mat <- sapply(a.vals, function(a.tmp, ...) {
     xa.tmp <- data.frame(x0, a = a.tmp)
-    return(mean(predict(mumod, newdata = xa.tmp, type = "response")))
+    return(predict(mumod, newdata = xa.tmp, type = "response"))
   })
   
+  # weights
   mod <- calibrate(cmat = cbind(x1.mat), target = n1*colMeans(x0.mat))
   rhohat <- mod$weights
   pimod <- SuperLearner(Y = a, X = data.frame(x1), SL.lib = sl.lib, family = gaussian())
   pimod.vals <- c(pimod$SL.predict)
-  
+
   sd.a <- sd(a - pimod.vals)
-  a.std <- c(a- pimod.vals)/sd.a
+  a.std <- c(a - pimod.vals)/sd.a
   dens <- density(a.std)
   pihat <- approx(x = dens$x, y = dens$y, xout = a.std)$y / sd.a
-  
+
   phat <- sapply(a, function(a.tmp, ...) {
     a.std.tmp <- c(a.tmp - pimod.vals)/sd.a
-    return(mean(approx(x = dens$x, y = dens$y, xout = a.std.tmp)$y / sd.a, na.rm = TRUE))
+    return(mean(approx(x = dens$x, y = dens$y, xout = a.std.tmp)$y / sd.a, na.rm = T))
   })
+
+  wts <- c(rhohat*phat/pihat, rep(1, n0))
   
-  wts <- weights*rhohat*phat/pihat
-  psi <- c((y - muhat)*wts + mhat)
+  # full calibration weights
+  # astar <- c(a - mean(a))/var(a)
+  # astar2 <- -1 + c(a - mean(a))^2/var(a)
+  # mod <- calibrate(cmat = cbind(x1, x1*astar, astar2),
+  #                  target = c(n0*colMeans(x0), rep(0, m+1)))
+  # wts <- mod$weights
   
-  out <- sapply(a.vals, kern_est, psi = psi, a = a, bw = bw, se.fit = FALSE)
+  # regression
+  psi <- (y - muhat)
+  
+  out <- sapply(a.vals, kern_est_dr, psi = psi, mhat.mat = mhat.mat, a = a,
+                weights = wts, s = s, a.vals = a.vals, bw = bw, se.fit = TRUE)
   
   return(out)
   

@@ -1,55 +1,62 @@
-kern_est <- function(a.new, a, psi, bw, se.fit = FALSE, weights = NULL, int.mat = NULL, a.vals = NULL) {
-    
+kern_est_dr <- function(a.new, psi, mhat.mat, a, s, a.vals, bw, 
+                        se.fit = FALSE, weights = NULL, int.mat = NULL) {
+
+  mhat <- mhat.mat[,which(a.vals == a.new)]
+  
+  n1 <- sum(s)
+  n0 <- sum(1 - s)
+  
   if(is.null(weights))
-    weights <- rep(1, times = length(a))
+    weights <- rep(1, times = n0 + n1)
   
-  n <- length(a)
-  
-  ## LOESS Kernel
-  
-  # # subset index
-  # a.std <- a - a.new
-  # k <- floor(min(bw, 1)*length(a))
-  # idx <- order(abs(a.std))[1:k]
-  # 
-  # # subset
-  # a.std <- a.std[idx]
-  # psi <- psi[idx]
-  # max.a.std <- max(abs(a.std))
-  # 
-  # # construct kernel weight
-  # k.std <- c((1 - abs(a.std/max.a.std)^3)^3)
-  # g.std <- cbind(1, a.std)
-  
-  ## Gaussian Kernel
   a.std <- (a - a.new) / bw
-  k.std <- dnorm(a.std) / bw
-  g.std <- cbind(1, a.std)
+  k.std.tmp <- dnorm(a.std) / bw
+  k.std <- c(n1*k.std.tmp/sum(k.std.tmp), rep(1, n0))
+  g.std <- as.matrix(Matrix::bdiag(cbind(1, a.std), rep(1, n0)))
+  xi <- c(psi, mhat)
   
-  b <- lm(psi ~ -1 + g.std, weights = weights*k.std)$coefficients
-  mu <- b[1]
+  b <- lm(xi ~ -1 + g.std, weights = weights*k.std)$coefficients
+  mu <- unname(b[1] + b[3])
   
-  if (se.fit & !is.null(int.mat)) {
+  if (se.fit) {
     
     eta <- c(g.std %*% b)
     
-    ## Gaussian
-    kern.mat <- matrix(rep(dnorm((a.vals - a.new) / bw) / bw, n), byrow = T, nrow = n)
-    g.vals <- matrix(rep(c(a.vals - a.new) / bw, n), byrow = T, nrow = n)
-    intfn1.mat <- kern.mat * int.mat
-    intfn2.mat <- g.vals * kern.mat * int.mat
+    U <- solve(crossprod(g.std, weights*k.std*g.std))
+    V <- weights * k.std * g.std * (xi - eta)
+    Sig <- U %*% crossprod(V) %*% U
     
-    int1 <- rowSums(matrix(rep((a.vals[-1] - a.vals[-length(a.vals)]), n), byrow = T, nrow = n)*
-                      (intfn1.mat[,-1] + intfn1.mat[,-length(a.vals)])/2)
-    int2 <- rowSums(matrix(rep((a.vals[-1] - a.vals[-length(a.vals)]), n), byrow = T, nrow = n)*
-                      (intfn2.mat[,-1] + intfn2.mat[,-length(a.vals)])/2)
+    return(c(mu = mu, sig2 = Sig[1,1] + Sig[3,3]))
+    
+  } else
+    return(mu)
+  
+}
+
+kern_est_ipw <- function(a.new, y, a, a.vals, bw, se.fit = FALSE, weights = NULL, int.mat = NULL) {
+  
+  n1 <- length(y)
+  
+  if(is.null(weights))
+    weights <- rep(1, times = n1)
+  
+  a.std <- (a - a.new) / bw
+  k.std.tmp <- dnorm(a.std) / bw
+  k.std <- n1*k.std.tmp/sum(k.std.tmp)
+  g.std <- cbind(1, a.std)
+  
+  b <- lm(y ~ -1 + g.std, weights = weights*k.std)$coefficients
+  mu <- unname(b[1])
+  
+  if (se.fit) {
+    
+    eta <- c(g.std %*% b)
     
     U <- solve(crossprod(g.std, weights*k.std*g.std))
-    V <- cbind(weights*(k.std * (psi - eta) + int1),
-               weights*(a.std * k.std * (psi - eta) + int2))
-    sig <- U %*% crossprod(V) %*% U
+    V <- weights * k.std * g.std * (xi - eta)
+    Sig <- U %*% crossprod(V) %*% U
     
-    return(c(mu = mu, sig = sig[1,1]))
+    return(c(mu = mu, sig2 = Sig[1,1]))
     
   } else
     return(mu)
